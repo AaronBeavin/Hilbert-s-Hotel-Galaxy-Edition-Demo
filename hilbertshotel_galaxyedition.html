@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en" >
+<head>
+  <meta charset="UTF-8" />
+  <title>Hilbert’s Hotel: Galaxy Edition - Interactive Game</title>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      background: black;
+      overflow: hidden;
+      font-family: 'Orbitron', sans-serif;
+      color: #00ffea;
+    }
+    #game-container {
+      margin: 0 auto;
+      display: block;
+      max-width: 800px;
+      height: 600px;
+    }
+    #ui {
+      position: fixed;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      text-align: center;
+      z-index: 10;
+      max-width: 800px;
+      width: 100%;
+    }
+    button {
+      background: #00ffea;
+      border: none;
+      color: black;
+      padding: 10px 20px;
+      margin: 5px;
+      font-weight: bold;
+      font-family: 'Orbitron', sans-serif;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+      user-select: none;
+    }
+    button:hover {
+      background: #00ccbb;
+    }
+    #challengePrompt {
+      margin-top: 10px;
+      font-size: 18px;
+    }
+    #scoreBoard {
+      margin-top: 10px;
+      font-size: 20px;
+      font-weight: bold;
+    }
+    input[type="number"] {
+      font-size: 18px;
+      width: 80px;
+      padding: 5px;
+      border-radius: 6px;
+      border: none;
+      margin-left: 10px;
+      text-align: center;
+    }
+    #feedback {
+      margin-top: 8px;
+      font-size: 16px;
+      font-weight: bold;
+      min-height: 22px;
+    }
+    #timerBarContainer {
+      width: 760px;
+      height: 20px;
+      background: #003322;
+      margin: 10px auto 0 auto;
+      border-radius: 10px;
+      overflow: hidden;
+      display: none;
+    }
+    #timerBar {
+      height: 100%;
+      background: #00ffaa;
+      width: 0;
+      transition: width 0.1s linear;
+    }
+  </style>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+<div id="ui">
+  <button onclick="game.scene.scenes[0].addOneGuest()">Add 1 Guest</button>
+  <button onclick="game.scene.scenes[0].addInfiniteGuests()">Add Infinite Guests</button>
+  <button onclick="game.scene.scenes[0].addInfiniteBuses()">Infinite Buses</button>
+  <button onclick="game.scene.scenes[0].startChallenge()">Start Challenge</button>
+
+  <div id="challengePrompt" style="display:none;">
+    Where will Bus <span id="busNum"></span> Seat <span id="seatNum"></span> guest go?
+    <input type="number" id="answerInput" min="1" />
+    <button onclick="game.scene.scenes[0].submitAnswer()">Submit</button>
+    <div id="feedback"></div>
+  </div>
+
+  <div id="scoreBoard">Score: 0</div>
+
+  <div id="timerBarContainer">
+    <div id="timerBar"></div>
+  </div>
+</div>
+
+<div id="game-container"></div>
+
+<script>
+const guestTypes = ['👨‍🚀', '👽', '🤖', '🛰️']; // astronaut, alien, robot, satellite
+
+const config = {
+  type: Phaser.AUTO,
+  width: 800,
+  height: 600,
+  parent: 'game-container',
+  backgroundColor: '#000011',
+  scene: {
+    preload,
+    create,
+    update,
+  },
+  input: {
+    activePointers: 3
+  }
+};
+
+let game = new Phaser.Game(config);
+
+function preload() {
+  this.load.image('star', 'https://raw.githubusercontent.com/nathanaltice/space-game-assets/main/star.png');
+  this.load.image('room', 'https://cdn-icons-png.flaticon.com/512/5693/5693814.png');
+
+  this.load.audio('bgm', 'https://cdn.jsdelivr.net/gh/jbrown11/phaser3-rex-notes/docs/site/audio/key-rolling.mp3');
+  this.load.audio('teleport', 'https://freesound.org/data/previews/320/320181_5260873-lq.mp3');
+  this.load.audio('success', 'https://freesound.org/data/previews/170/170145_2437358-lq.mp3');
+  this.load.audio('error', 'https://freesound.org/data/previews/331/331912_3248244-lq.mp3');
+}
+
+function create() {
+  const scene = this;
+  this.rooms = [];
+  this.guests = [];
+  this.maxRooms = 12;
+  this.roomPositions = [];
+
+  this.score = 0;
+  this.challengeActive = false;
+  this.challengeTime = 15; // seconds
+  this.timerEvent = null;
+
+  this.bgm = this.sound.add('bgm', { loop: true, volume: 0.25 });
+  this.bgm.play();
+
+  // Background stars
+  for (let i = 0; i < 100; i++) {
+    const x = Phaser.Math.Between(0, this.sys.game.config.width);
+    const y = Phaser.Math.Between(0, this.sys.game.config.height);
+    this.add.image(x, y, 'star').setScale(0.1).setAlpha(0.5);
+  }
+
+  // Layout rooms in circle orbit
+  const centerX = this.sys.game.config.width / 2;
+  const centerY = this.sys.game.config.height / 2 + 50;
+  const radius = 200;
+
+  for (let i = 0; i < this.maxRooms; i++) {
+    const angle = (2 * Math.PI / this.maxRooms) * i - Math.PI / 2;
+    const x = centerX + radius * Math.cos(angle);
+    const y = centerY + radius * Math.sin(angle);
+    this.roomPositions.push({ x, y });
+    const roomSprite = this.add.image(x, y, 'room').setScale(0.15).setAlpha(0.7);
+    const roomText = this.add.text(x, y + 40, `Room ${i + 1}`, { font: '16px Orbitron', fill: '#00ffea' }).setOrigin(0.5);
+    this.rooms.push({ sprite: roomSprite, text: roomText, guest: null });
+  }
+
+  // Add guests initially
+  for (let i = 0; i < this.maxRooms; i++) {
+    this.addGuest(i, `Guest ${i + 1}`);
+  }
+
+  // Guest tap interaction
+  this.input.on('gameobjectdown', (pointer, gameObject) => {
+    if (scene.rooms.some(room => room.guest === gameObject)) {
+      // Animate bounce pulse
+      scene.tweens.add({
+        targets: gameObject,
+        scale: 1.3,
+        yoyo: true,
+        duration: 300,
+        ease: 'Sine.easeInOut'
+      });
+      // Show guest info popup
+      const roomIndex = scene.rooms.findIndex(room => room.guest === gameObject);
+      alert(`Guest Info:\nRoom: ${roomIndex + 1}\nName: ${gameObject.name}`);
+    }
+  });
+}
+
+function addGuest(roomIndex, guestName) {
+  const scene = game.scene.scenes[0];
+  const room = scene.rooms[roomIndex];
+
+  if (room.guest) {
+    scene.tweens.add({
+      targets: room.guest,
+      alpha: 0,
+      scale: 0.5,
+      duration: 400,
+      onComplete: () => room.guest.destroy()
+    });
+  }
+
+  const pos = scene.roomPositions[roomIndex];
+  const emoji = guestTypes[Math.floor(Math.random() * guestTypes.length)];
+
+  let guest = scene.add.text(pos.x, pos.y, emoji, { fontSize: '28px' }).setOrigin(0.5);
+  guest.name = guestName;
+  guest.alpha = 0;
+  guest.scale = 0.5;
+
+  scene.sound.play('teleport');
+
+  scene.tweens.add({
+    targets: guest,
+    alpha: 1,
+    scale: 1.2,
+    yoyo: true,
+    duration: 400,
+    ease: 'Back.easeOut'
+  });
+
+  scene.tweens.add({
+    targets: room.sprite,
+    alpha: 1,
+    duration: 300,
+    yoyo: true,
+    repeat: 1,
+    ease: 'Sine.easeInOut'
+  });
+
+  room.guest = guest;
+}
+
+function update() {
+  const scene = game.scene.scenes[0];
+  if (scene.challengeActive && scene.timerEvent) {
+    const elapsed = scene.timerEvent.getElapsedSeconds();
+    const ratio = Phaser.Math.Clamp(1 - (elapsed / scene.challengeTime), 0, 1);
+    const timerBar = document.getElementById('timerBar');
+    timerBar.style.width = (760 * ratio) + 'px';
+  }
+}
+
+// Game logic functions
+function addOneGuest() {
+  const scene = game.scene.scenes[0];
+  for (let i = scene.maxRooms - 1; i > 0; i--) {
+    if (scene.rooms[i - 1].guest) {
+      const name = scene.rooms[i - 1].guest.name;
+      addGuest(i, name, scene);
+    } else {
+      if (scene.rooms[i].guest) {
+        scene.rooms[i].guest.destroy();
+        scene.rooms[i].guest = null;
+      }
+    }
+  }
+  addGuest(0, 'New Guest', scene);
+}
+
+function addInfiniteGuests() {
+  const scene = game.scene.scenes[0];
+  let newGuests = new Array(scene.maxRooms).fill(null);
+
+  for (let i = 0; i < scene.maxRooms; i++) {
+    if (i % 2 === 0 && scene.rooms[i].guest) {
+      newGuests[i] = scene.rooms[i].guest.name;
+    }
+  }
+  for (let i = 0; i < scene.maxRooms; i++) {
+    if (scene.rooms[i].guest) {
+      scene.rooms[i].guest.destroy();
+      scene.rooms[i].guest = null;
+    }
+  }
+  for (let i = 0; i < scene.maxRooms; i++) {
+    if (i % 2 === 0 && newGuests[i]) {
+      addGuest(i, newGuests[i], scene);
+    } else if (i % 2 === 1) {
+      addGuest(i, 'New Guest ' + ((i + 1) / 2), scene);
+    }
+  }
+}
+
+function addInfiniteBuses() {
+  const scene = game.scene.scenes[0];
+  for (let i = 0; i < scene.maxRooms; i++) {
+    if (scene.rooms[i].guest) {
+      scene.rooms[i].guest.destroy();
+      scene.rooms[i].guest = null;
+    }
+  }
+  const busSeatPairs = [
+    [1, 1], [1, 2], [1, 3],
+    [2, 1], [2, 2], [2, 3],
+    [3, 1], [3, 2], [3, 3],
+    [4, 1], [4, 2], [4, 3]
+  ];
+  for (let i = 0; i < busSeatPairs.length && i < scene.maxRooms; i++) {
+    const [bus, seat] = busSeatPairs[i];
+    const roomNumber = Math.pow(2, bus) * Math.pow(3, seat);
+    addGuest(i, `Bus ${bus} Seat ${seat}\nR${roomNumber}`, scene);
+  }
+}
+
+// Challenge mode
+function startChallenge() {
+  const scene = game.scene.scenes[0];
+  if (scene.challengeActive) return;
+  scene.challengeActive = true;
+  scene.score = 0;
+  document.getElementById('scoreBoard').innerText = 'Score: 0';
+  document.getElementById('challengePrompt').style.display = 'block';
+  document.getElementById('timerBarContainer').style.display = 'block';
+  generateChallenge();
+  startTimer();
+}
+
+function generateChallenge() {
+  const scene = game.scene.scenes[0];
+  scene.currentBus = Phaser.Math.Between(1, 4);
+  scene.currentSeat = Phaser.Math.Between(1, 3);
+  document.getElementById('busNum').innerText = scene.currentBus;
+  document.getElementById('seatNum').innerText = scene.currentSeat;
+  document.getElementById('feedback').innerText = '';
+  document.getElementById('answerInput').value = '';
+}
+
+function submitAnswer() {
+  const scene = game.scene.scenes[0];
+  if (!scene.challengeActive) return;
+  const answer = parseInt(document.getElementById('answerInput').value);
+  const correctRoom = Math.pow(2, scene.currentBus) * Math.pow(3, scene.currentSeat);
+  if (answer === correctRoom) {
+    document.getElementById('feedback').innerText = '✅ Correct!';
+    scene.score += 1;
+    scene.sound.play('success');
+    document.getElementById('scoreBoard').innerText = 'Score: ' + scene.score;
+    generateChallenge();
+    startTimer();
+  } else {
+    document.getElementById('feedback').innerText = '❌ Try Again!';
+    scene.sound.play('error');
+  }
+}
+
+function startTimer() {
+  const scene = game.scene.scenes[0];
+  if (scene.timerEvent) scene.timerEvent.remove();
+  scene.timerEvent = scene.time.addEvent({
+    delay: scene.challengeTime * 1000,
+    callback: () => {
+      document.getElementById('feedback').innerText = '⏰ Time up! Moving to next...';
+      scene.sound.play('error');
+      generateChallenge();
+      startTimer();
+    }
+  });
+}
+
+window.addOneGuest = addOneGuest;
+window.addInfiniteGuests = addInfiniteGuests;
+window.addInfiniteBuses = addInfiniteBuses;
+window.startChallenge = startChallenge;
+window.submitAnswer = submitAnswer;
+</script>
+
+</body>
+</html>
